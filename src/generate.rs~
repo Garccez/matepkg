@@ -1,0 +1,25 @@
+use std::fs;
+use std::io:Write;
+
+fn generate_metadata(name_version_build: Option<String>) -> std::io::Result<()> {
+    let (name, version, build) = if let Some(s) = name_version_build {
+	let parts = Vec<&str> = s.split('-').collect();
+	// Logic to separate name, version and build
+	(parts.get(0).unwrap_or(&"").to_string(), parts.get(1).unwrap_or(&"").to_string(), parts.get(2).unwrap_or(&"").to_string())
+    } else {
+	("".to_string(), "".to_string(), "".to_string())
+    };
+
+    let content = format!(r#"
+# Metadata file for Mate packages.
+maintainer = ""
+pkgname = "{}"
+version = "{}"
+build = "{}"
+license = ""
+desc = ""
+url = ""
+# Package dependencies (optional)
+deps = []
+"#, name, version, build);
+}

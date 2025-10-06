@@ -1,0 +1,70 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
+/// Remove um pacote instalado do sistema.
+/// Requer privilégios de root para ser executada.
+pub fn remove_package(package_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // ---- 1. LOCALIZAÇÃO DOS ARQUIVOS DO PACOTE NO BD ----
+    println!("=> Preparando para remover '{}'...", package_name);
+    let list_path = PathBuf::from(format!("/var/lib/matepkg/list/{}.list", package_name));
+    let desc_path = PathBuf::from(format!("/var/lib/matepkg/desc/{}.toml", package_name));
+
+    if !list_path.exists() || !desc_path.exists() {
+        return Err(format!("Pacote '{}' não parece estar instalado (arquivos de manifesto não encontrados).", package_name).into());
+    }
+
+    // ---- 2. LEITURA DO MANIFESTO ----
+    println!("-> Lendo manifesto de arquivos...");
+    let list_content = fs::read_to_string(&list_path)?;
+    // Transforma o conteúdo do arquivo .list em uma lista de PathBufs
+    let paths_to_remove: Vec<PathBuf> = list_content.lines().map(PathBuf::from).collect();
+
+    if paths_to_remove.is_empty() {
+        eprintln!("[AVISO] O manifesto do pacote está vazio.");
+    }
+
+    // ---- 3. REMOÇÃO - PRIMEIRA PASSADA (ARQUIVOS) ----
+    println!("-> Removendo arquivos...");
+    let mut file_count = 0;
+    for path in &paths_to_remove {
+        let full_path = PathBuf::from("/").join(path);
+        if full_path.is_file() || full_path.is_symlink() {
+            match fs::remove_file(&full_path) {
+                Ok(_) => {
+                    // Opcional: imprimir cada arquivo removido
+                    // println!("   Removido: {}", full_path.display());
+                    file_count += 1;
+                }
+                Err(e) => eprintln!("[AVISO] Não foi possível remover o arquivo '{}': {}", full_path.display(), e),
+            }
+        }
+    }
+    println!("-> {} arquivos removidos.", file_count);
+
+    // ---- 4. REMOÇÃO - SEGUNDA PASSADA (DIRETÓRIOS VAZIOS) ----
+    println!("-> Removendo diretórios vazios...");
+    let mut dir_count = 0;
+    // Iteramos em ordem REVERSA para apagar subdiretórios antes dos diretórios pais.
+    for path in paths_to_remove.iter().rev() {
+        let full_path = PathBuf::from("/").join(path);
+        if full_path.is_dir() {
+            // fs::remove_dir SÓ funciona se o diretório estiver vazio.
+            // Isso nos protege de apagar diretórios importantes do sistema.
+            if fs::remove_dir(&full_path).is_ok() {
+                // Opcional: imprimir cada diretório removido
+                // println!("   Removido: {}", full_path.display());
+                dir_count += 1;
+            }
+        }
+    }
+    println!("-> {} diretórios removidos.", dir_count);
+
+    // ---- 5. LIMPEZA DO BANCO DE DADOS ----
+    println!("-> Limpando registros do banco de dados...");
+    fs::remove_file(&list_path)?;
+    fs::remove_file(&desc_path)?;
+    println!("-> Registros removidos.");
+
+    println!("\n=> Package '{}' successfully removed!", package_name);
+    Ok(())
+}
