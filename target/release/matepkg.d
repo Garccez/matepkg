@@ -1,1 +1,0 @@
-/home/garccez/Gits/matepkg/target/release/matepkg: /home/garccez/Gits/matepkg/src/create.rs /home/garccez/Gits/matepkg/src/generate.rs /home/garccez/Gits/matepkg/src/install.rs /home/garccez/Gits/matepkg/src/main.rs /home/garccez/Gits/matepkg/src/package.rs /home/garccez/Gits/matepkg/src/remove.rs
