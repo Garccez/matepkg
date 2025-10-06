@@ -1,57 +1,27 @@
-# bananapkg :banana: :package: 🇧🇷 [![Bash4.4.18-shield]](http://tldp.org/LDP/abs/html/bashver4.html#AEN21220) [![LICENSE](https://img.shields.io/badge/Licen%C3%A7a-MIT-brightgreen.svg)](https://github.com/slackjeff/bananapkg/blob/master/LICENSE) [![Doe-shield]](https://slackjeff.com.br/doacao/)
+# :mate: matepkg :package:
 
-> Gerenciador de Pacotes de baixo nível, escrito em Shell Bash.
- 
-![Banner]
+Matepkg is a Linux package manager written in Rust, it is based on how [bananapkg](https://github.com/slackjeff/bananapkg) works, but later on I intend include new features. I'm using it as a learning project, it is not yet complete.
 
-### Para uma melhor Documentação consulte
-* [Site Oficial](https://bananapkg.github.io/)
-
-### DESENVOLVEDORES: leiam o Code-Style :ledger:
-* [Code Style](https://bananapkg.github.io/code-style.html)
-
-### Requisitos/Requirements :star:
-* **Bash** >= 4.4.18 <br/>
-* **GNU Sed** >= 4.2.2<br/>
-* **GNU Tar** >= 1.30<br/>
-* **AWK** >= 4.2.1<br/>
-* **xz** >= 5.2.2<br/>
-* **GPG** >= 2.2.9<br/>
-
-### Distribuições que usam o Banana com principal gerenciador :heart:
-* [MazonOS](http://mazonos.com/pt)
+## :star: Requirements (building from source)
+* **Rust** >= 1.90.0 <br/>
 
 ----
 
-### Instalação Direta :computer:
-**Clone o Repositório**
-```bash
-git clone https://github.com/slackjeff/bananapkg
+## Building from source
+Clone the repository and enter it.
 ```
-
-**Como ROOT, crie os diretórios**
-```bash
-mkdir -vp /var/lib/banana/{list,desc,remove}
-mkdir -v /etc/banana
-mkdir -v /usr/libexec/banana
+$ git clone https://github.com/Garccez/matepkg
+$ cd matepkg
 ```
-
-**Copie os arquivos**
-```bash
-cp -v banana /sbin/
-cp -v banana.conf /etc/banana
-cp -v {core,help}.sh /usr/libexec/banana
-cp -v banana.8 /usr/share/man/pt_BR/man8/
+Compile it.
 ```
-*Enjoy ;)*
-
-## Instalação Automática :computer:
-**Conceda permissões e execute o script**
-```bash
-chmod +x install.sh
-bash install.sh
+$ cargo build --release
 ```
+Or, if you wish to install it
+```
+# cargo install --path . --root /usr/
+```
+Remove ``--root /usr/`` if you do not wish to install in your /usr/bin/ folder.
 
-[Banner]: https://raw.githubusercontent.com/slackjeff/bananapkg/master/imgs/banners/bananabanner.png
-[Bash4.4.18-shield]: https://img.shields.io/badge/Bash-4.4.18%2B-brightgreen.svg "Bash 4.4.18 Ou superior"
-[Doe-shield]: https://img.shields.io/badge/Doe-Pagseguro-red.svg
+## Binary installation
+**Not possible**, binaries are not distributed just yet.
