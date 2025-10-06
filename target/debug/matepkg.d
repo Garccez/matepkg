@@ -1,1 +1,0 @@
-/home/garccez/Documentos/Rust/matepkg/target/debug/matepkg: /home/garccez/Documentos/Rust/matepkg/src/create.rs /home/garccez/Documentos/Rust/matepkg/src/generate.rs /home/garccez/Documentos/Rust/matepkg/src/install.rs /home/garccez/Documentos/Rust/matepkg/src/main.rs /home/garccez/Documentos/Rust/matepkg/src/package.rs /home/garccez/Documentos/Rust/matepkg/src/remove.rs

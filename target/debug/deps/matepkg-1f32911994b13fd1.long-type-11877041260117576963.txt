@@ -1,1 +1,0 @@
-Vec<tar::Entry<'_, zstd::Decoder<'_, BufReader<std::fs::File>>>>
