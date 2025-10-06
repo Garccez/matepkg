@@ -4,7 +4,7 @@ Matepkg is a Linux package manager written in Rust, it is based on how [bananapk
 
 ## :star: Requirements (building from source)
 * **Rust** >= 1.90.0 <br/>
-
+* **^Cargo** >= 1.90.0
 ----
 
 ## Building from source
