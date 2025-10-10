@@ -104,7 +104,7 @@ pub fn upgrade_package(new_package_path: &Path) -> Result<(), Box<dyn std::error
     install_package(new_package_path)?;
 
     // remove the files that have become obsolete.
-    println!("==> [2/3] Removing obsolte version of the old version…");
+    println!("==> [2/3] Removing obsolete files of the old version…");
     let mut dirs_to_check: HashSet<PathBuf> = HashSet::new(); // to remove empty dirs
     for file_path in obsolete_files {
         let full_path = Path::new("/").join(file_path);
