@@ -16,3 +16,5 @@ Cargo.lock
 
 info/
 **/*.rs~
+*.mtz
+*.mtz.sha256
