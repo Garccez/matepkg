@@ -6,11 +6,13 @@ mod generate;
 mod create;
 mod install;
 mod remove;
+mod upgrade;
 
 use crate::generate::generate_metadata;
 use crate::create::create_package;
 use crate::install::install_package;
 use crate::remove::remove_package;
+use crate::upgrade::upgrade_package;
 
 #[derive(Parser, Debug)]
 #[command(name = "mate", version = "0.1.0", about = "Simple Linux package manager in Rust")]
@@ -102,8 +104,19 @@ fn main() {
             // TODO: Chamar a função de busca
         }
         Commands::Upgrade { packages } => {
-            println!("Atualizando pacotes: {:?}", packages);
-             // TODO: Chamar a função de upgrade
+	    if std::env::var("USER").unwrap_or_default() != "root" {
+		eprintln!("\n=> [ERROR] This operation requires root privileges. Run this again with sudo or with root privileges.");
+                std::process::exit(1);
+	    }
+	    println!("=> Upgrading packages: {:#?}", packages);
+	    for pkg_name in packages {
+		println!("\n=> Starting upgrade of package: {}", pkg_name);
+		let pkg_path = PathBuf::from(pkg_name);
+		if let Err(e) = upgrade_package(&pkg_path) {
+		    eprintln!("\n=> [ERROR] Package upgrade failed: {}", e);
+		    std::process::exit(1);
+		}
+	    }
         }
     }
 }

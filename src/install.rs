@@ -4,7 +4,6 @@ use std::process::Command;
 use sha2::{Sha256, Digest};
 use tar::Archive;
 use zstd::stream::Decoder;
-use std::ffi::OsStr;
 
 use crate::package::Metadata;
 

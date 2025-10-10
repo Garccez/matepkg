@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Removes an installed package from the system.
 /// Requires root privileges to be executed.
