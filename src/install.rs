@@ -130,8 +130,8 @@ pub fn install_package(package_path_arg: &Path) -> Result<(), Box<dyn std::error
 
     // -- Final cleaning --
     println!("=> Cleaning control files from the root…");
-    // Remove os arquivos de controle que foram extraídos para a raiz.
-    // Usamos a lista `extracted_paths` para garantir que só apagamos o que extraímos.
+    // Removes the control files that were extracted to the root.
+    // Using the list `extracted_paths` to guarantee that only what was extracted is deleted.
     if pos_install_script.exists() {
         fs::remove_file(pos_install_script)?;
     }
