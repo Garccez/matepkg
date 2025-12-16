@@ -123,7 +123,7 @@ pub fn install_package(package_path_arg: &Path) -> Result<(), Box<dyn std::error
         println!("=> Running post-install script (pos.sh)…");
         let status = Command::new("bash").arg(&pos_install_script).status()?;
         if !status.success() {
-            // Em uma versão futura, poderíamos tentar reverter a instalação aqui.
+            // Maybe we should revert the installation here in the future?
             eprintln!("[WARNING] The post-install script returned an error.");
         }
     }
