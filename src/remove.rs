@@ -1,8 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
 
-/// Removes an installed package from the system.
-/// Requires root privileges to be executed.
 pub fn remove_package(package_name: &str) -> Result<(), Box<dyn std::error::Error>> {
     // -- Finding package manifest path --
     println!("=> Preparing to remove '{}'…", package_name);
@@ -32,7 +30,7 @@ pub fn remove_package(package_name: &str) -> Result<(), Box<dyn std::error::Erro
             match fs::remove_file(&full_path) {
                 Ok(_) => {
                     // Optionally print every removed file
-                    // println!("   Removido: {}", full_path.display());
+                    // println!("   Removed: {}", full_path.display());
                     file_count += 1;
                 }
                 Err(e) => eprintln!("[WARNING] It was not possible to remove the file '{}': {}", full_path.display(), e),
@@ -50,14 +48,14 @@ pub fn remove_package(package_name: &str) -> Result<(), Box<dyn std::error::Erro
         if full_path.is_dir() {
             if fs::remove_dir(&full_path).is_ok() {
                 // Optionally print every removed directory
-                // println!("   Removido: {}", full_path.display());
+                // println!("   Removed: {}", full_path.display());
                 dir_count += 1;
             }
         }
     }
     println!("=> {} directories removed.", dir_count);
 
-    // ---- 5. LIMPEZA DO BANCO DE DADOS ----
+    // ---- Removal: Database cleaning ----
     println!("=> Cleaning database logs…");
     fs::remove_file(&list_path)?;
     fs::remove_file(&desc_path)?;
