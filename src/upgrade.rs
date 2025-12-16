@@ -8,7 +8,7 @@ use version_compare::{Version, Cmp};
 use crate::package::Metadata;
 use crate::install::install_package;
 
-// -- auxiliary function 1: analyzes a new .mtz package --
+// -- Auxiliary function 1: analyzes a new .mtz package --
 /// Reads the metadata and manifest of a new package file without extracting it
 fn analyze_new_package(package_path: &Path) -> Result<(Metadata, HashSet<PathBuf>), Box<dyn std::error::Error>> {
     // TODO: Add checksum validation?
@@ -42,7 +42,7 @@ fn analyze_new_package(package_path: &Path) -> Result<(Metadata, HashSet<PathBuf
     }
 }
 
-// -- auxiliary function 2: analyzes an already installed package --
+// -- Auxiliary function 2: analyzes an already installed package --
 /// Finds and reads the metadata and manifest of an already installed package.
 fn find_and_analyze_installed_package(pkgname: &str) -> Result<(Metadata, HashSet<PathBuf>, String), Box<dyn std::error::Error>> {
     let desc_dir = Path::new("/var/lib/matepkg/desc/");
@@ -73,17 +73,17 @@ fn find_and_analyze_installed_package(pkgname: &str) -> Result<(Metadata, HashSe
     }
 }
 
-// -- main function: upgrades (actually) --
+// -- Main function: upgrades (actually) --
 pub fn upgrade_package(new_package_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    // analyze the new package.
+    // Analyze the new package.
     let (new_metadata, new_manifest) = analyze_new_package(new_package_path)?;
     println!("=> New package: {}, version {}, build {}", new_metadata.pkgname, new_metadata.version, new_metadata.build);
 
-    // find and analyze the old package.
+    // Find and analyze the old package.
     let (old_metadata, old_manifest, old_canonical_name) = find_and_analyze_installed_package(&new_metadata.pkgname)?;
     println!("=> Installed version: {}, version {}, build {}", old_metadata.pkgname, old_metadata.version, old_metadata.build);
 
-    // compare versions.
+    // Compare versions.
     let new_ver = Version::from(&new_metadata.version).ok_or("New package version invalid.")?;
     let old_ver = Version::from(&old_metadata.version).ok_or("Installed package version invalid.")?;
 
@@ -94,16 +94,16 @@ pub fn upgrade_package(new_package_path: &Path) -> Result<(), Box<dyn std::error
         _ => println!("=> Version validated. Continuing upgrade."),
     }
 
-    // calculate the difference of files
+    // Calculate the difference of files
     let obsolete_files: Vec<_> = old_manifest.difference(&new_manifest).collect();
     println!("=> {} obsolete files to remove.", obsolete_files.len());
 
-    // do the transaction
-    // installing the new package.
+    // Do the transaction
+    // Installing the new package.
     println!("==> [1/3] Installing the new version…");
     install_package(new_package_path)?;
 
-    // remove the files that have become obsolete.
+    // Remove the files that have become obsolete.
     println!("==> [2/3] Removing obsolete files of the old version…");
     let mut dirs_to_check: HashSet<PathBuf> = HashSet::new(); // to remove empty dirs
     for file_path in obsolete_files {
@@ -115,14 +115,14 @@ pub fn upgrade_package(new_package_path: &Path) -> Result<(), Box<dyn std::error
             }
         }
     }
-    // to remove empty dirs²
+    // Remove empty dirs²
     for dir in dirs_to_check {
-        if dir.read_dir()?.next().is_none() { // checks if it's empty
+        if dir.read_dir()?.next().is_none() { // Checks if it's empty
             let _ = fs::remove_dir(dir);
         }
     }
 
-    // clean the old matadata and manifest from the database.
+    // Clean the old matadata and manifest from the database.
     println!("--> [3/3] Cleaning old registry files from the database…");
     fs::remove_file(format!("/var/lib/matepkg/list/{}.list", old_canonical_name))?;
     fs::remove_file(format!("/var/lib/matepkg/desc/{}.toml", old_canonical_name))?;
