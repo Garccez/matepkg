@@ -2,17 +2,25 @@ use std::collections::HashSet;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use tar::Archive;
+use version_compare::{Cmp, Version};
 use zstd::stream::Decoder;
-use version_compare::{Version, Cmp};
 
-use crate::package::Metadata;
 use crate::install::install_package;
+use crate::package::{Metadata, desc_dir, list_dir};
 
 // -- Auxiliary function 1: analyzes a new .mtz package --
 /// Reads the metadata and manifest of a new package file without extracting it
-fn analyze_new_package(package_path: &Path) -> Result<(Metadata, HashSet<PathBuf>), Box<dyn std::error::Error>> {
-    // TODO: Add checksum validation?
-    println!("=> Analyzing metadata and manifest of '{}'...", package_path.display());
+fn analyze_new_package(
+    package_path: &Path,
+) -> Result<(Metadata, HashSet<PathBuf>), Box<dyn std::error::Error>> {
+    let checksum_path = package_path.with_extension("mtz.sha256");
+    if !checksum_path.exists() {
+        return Err(format!("checksum file not found at '{}'", checksum_path.display()).into());
+    }
+    println!(
+        "=> Analyzing metadata and manifest of '{}'...",
+        package_path.display()
+    );
 
     let package_file = File::open(package_path)?;
     let decoder = Decoder::new(package_file)?;
@@ -30,7 +38,7 @@ fn analyze_new_package(package_path: &Path) -> Result<(Metadata, HashSet<PathBuf
             std::io::Read::read_to_string(&mut entry, &mut content)?;
             metadata = Some(toml::from_str(&content)?);
         }
-        
+
         if path.to_string_lossy() != "." {
             manifest.insert(path);
         }
@@ -44,16 +52,27 @@ fn analyze_new_package(package_path: &Path) -> Result<(Metadata, HashSet<PathBuf
 
 // -- Auxiliary function 2: analyzes an already installed package --
 /// Finds and reads the metadata and manifest of an already installed package.
-fn find_and_analyze_installed_package(pkgname: &str) -> Result<(Metadata, HashSet<PathBuf>, String), Box<dyn std::error::Error>> {
+fn find_and_analyze_installed_package(
+    pkgname: &str,
+) -> Result<(Metadata, HashSet<PathBuf>, String), Box<dyn std::error::Error>> {
     let desc_dir = Path::new("/var/lib/matepkg/desc/");
     let mut found_package: Option<PathBuf> = None;
 
     for entry in fs::read_dir(desc_dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_file() && path.file_name().unwrap_or_default().to_string_lossy().starts_with(pkgname) {
+        if path.is_file()
+            && path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .starts_with(pkgname)
+        {
             if found_package.is_some() {
-                return Err("Multiple versions of the same package found in the database. Solve manually.".into());
+                return Err(
+                    "Multiple versions of the same package found in the database. Solve manually."
+                        .into(),
+                );
             }
             found_package = Some(path);
         }
@@ -62,11 +81,14 @@ fn find_and_analyze_installed_package(pkgname: &str) -> Result<(Metadata, HashSe
     match found_package {
         Some(desc_path) => {
             let metadata: Metadata = toml::from_str(&fs::read_to_string(&desc_path)?)?;
-            let canonical_name = format!("{}-{}-{}", metadata.pkgname, metadata.version, metadata.build);
-            
-            let list_path = PathBuf::from(format!("/var/lib/matepkg/list/{}.list", canonical_name));
-            let manifest: HashSet<PathBuf> = fs::read_to_string(list_path)?.lines().map(PathBuf::from).collect();
-            
+            let canonical_name = metadata.canonical_name();
+
+            let list_path = list_dir().join(format!("{}.list", canonical_name));
+            let manifest: HashSet<PathBuf> = fs::read_to_string(list_path)?
+                .lines()
+                .map(PathBuf::from)
+                .collect();
+
             Ok((metadata, manifest, canonical_name))
         }
         None => Err("No installed version of the package found. Try installing it.".into()),
@@ -77,15 +99,23 @@ fn find_and_analyze_installed_package(pkgname: &str) -> Result<(Metadata, HashSe
 pub fn upgrade_package(new_package_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     // Analyze the new package.
     let (new_metadata, new_manifest) = analyze_new_package(new_package_path)?;
-    println!("=> New package: {}, version {}, build {}", new_metadata.pkgname, new_metadata.version, new_metadata.build);
+    println!(
+        "=> New package: {}, version {}, build {}",
+        new_metadata.pkgname, new_metadata.version, new_metadata.build
+    );
 
     // Find and analyze the old package.
-    let (old_metadata, old_manifest, old_canonical_name) = find_and_analyze_installed_package(&new_metadata.pkgname)?;
-    println!("=> Installed version: {}, version {}, build {}", old_metadata.pkgname, old_metadata.version, old_metadata.build);
+    let (old_metadata, old_manifest, old_canonical_name) =
+        find_and_analyze_installed_package(&new_metadata.pkgname)?;
+    println!(
+        "=> Installed version: {}, version {}, build {}",
+        old_metadata.pkgname, old_metadata.version, old_metadata.build
+    );
 
     // Compare versions.
     let new_ver = Version::from(&new_metadata.version).ok_or("New package version invalid.")?;
-    let old_ver = Version::from(&old_metadata.version).ok_or("Installed package version invalid.")?;
+    let old_ver =
+        Version::from(&old_metadata.version).ok_or("Installed package version invalid.")?;
 
     match new_ver.compare(old_ver) {
         Cmp::Lt | Cmp::Eq if new_metadata.build <= old_metadata.build => {
@@ -117,15 +147,16 @@ pub fn upgrade_package(new_package_path: &Path) -> Result<(), Box<dyn std::error
     }
     // Remove empty dirs²
     for dir in dirs_to_check {
-        if dir.read_dir()?.next().is_none() { // Checks if it's empty
+        if dir.read_dir()?.next().is_none() {
+            // Checks if it's empty
             let _ = fs::remove_dir(dir);
         }
     }
 
     // Clean the old matadata and manifest from the database.
     println!("--> [3/3] Cleaning old registry files from the database…");
-    fs::remove_file(format!("/var/lib/matepkg/list/{}.list", old_canonical_name))?;
-    fs::remove_file(format!("/var/lib/matepkg/desc/{}.toml", old_canonical_name))?;
+    fs::remove_file(list_dir().join(format!("{}.list", old_canonical_name)))?;
+    fs::remove_file(desc_dir().join(format!("{}.toml", old_canonical_name)))?;
 
     println!("\n=> '{}' upgraded successfully!", new_metadata.pkgname);
     Ok(())

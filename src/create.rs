@@ -1,13 +1,16 @@
+use sha2::{Digest, Sha256};
+use std::env;
 use std::fs::{self, File};
-use sha2::{Sha256, Digest};
+use std::path::Path;
 use tar::Builder;
 use zstd::stream::Encoder;
-use std::path::Path;
-use std::env;
 
 use crate::package::Metadata;
 
-pub fn create_package(package_name: &str, compression_level: i32) -> Result<(), Box<dyn std::error::Error>> {
+pub fn create_package(
+    package_name: &str,
+    compression_level: i32,
+) -> Result<(), Box<dyn std::error::Error>> {
     let info_dir = Path::new("info");
     let metadata_path = info_dir.join("desc.toml");
 
@@ -25,26 +28,36 @@ pub fn create_package(package_name: &str, compression_level: i32) -> Result<(), 
     println!("=> Reading and validating metadata from 'info/desc.toml'…");
 
     let metadata_content = fs::read_to_string(&metadata_path)
-	.map_err(|e| format!("Couldn't read '{}': {}", metadata_path.display(), e))?;
+        .map_err(|e| format!("Couldn't read '{}': {}", metadata_path.display(), e))?;
     let metadata: Metadata = toml::from_str(&metadata_content)
-	.map_err(|e| format!("Syntax error in '{}': {}", metadata_path.display(), e))?;
+        .map_err(|e| format!("Syntax error in '{}': {}", metadata_path.display(), e))?;
+    metadata
+        .validate()
+        .map_err(|e| format!("Invalid metadata: {}", e))?;
 
-    let expected_name = format!("{}-{}-{}", metadata.pkgname, metadata.version, metadata.build);
+    let expected_name = format!(
+        "{}-{}-{}",
+        metadata.pkgname, metadata.version, metadata.build
+    );
     if package_name != expected_name {
-	return Err(format!(
-	    "The inserted package name ('{}') is not the same as described in desc.toml ('{}').",
-	    package_name, expected_name
-	).into());
+        return Err(format!(
+            "The inserted package name ('{}') is not the same as described in desc.toml ('{}').",
+            package_name, expected_name
+        )
+        .into());
     }
     println!("=> Metadata successfully validated.");
 
     // -- Creation of compressed package .mtz --
     let archive_name = format!("{}.mtz", package_name);
-    println!("=> Creating compressed package '{}' (level {})…", archive_name, compression_level);
+    println!(
+        "=> Creating compressed package '{}' (level {})…",
+        archive_name, compression_level
+    );
 
     let original_dir = env::current_dir()?;
     env::set_current_dir(info_dir)?;
-    
+
     let file = File::create(original_dir.join(&archive_name))?;
     // Encode it with Zstd
     let encoder = Encoder::new(file, compression_level)?;
@@ -60,7 +73,10 @@ pub fn create_package(package_name: &str, compression_level: i32) -> Result<(), 
     // Let's go back to the original directory
     env::set_current_dir(&original_dir)?;
 
-    println!("=> Package successfully created at '{}'.", original_dir.display());
+    println!(
+        "=> Package successfully created at '{}'.",
+        original_dir.display()
+    );
 
     // -- SHA256 Checksum calculation --
     println!("=> Calculating SHA256 checksum…");
@@ -70,7 +86,7 @@ pub fn create_package(package_name: &str, compression_level: i32) -> Result<(), 
     let hash = hasher.finalize();
 
     let checksum_name = format!("{}.sha256", archive_name);
-    fs::write(&checksum_name, format!("{:x} {}\n", hash, format!("{}", &archive_name)))?;
+    fs::write(&checksum_name, format!("{:x} {}\n", hash, archive_name))?;
 
     println!("=> Checksum saved at '{}'", checksum_name);
 
