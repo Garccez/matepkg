@@ -25,3 +25,35 @@ Remove ``--root /usr/`` if you do not wish to install in your /usr/bin/ folder.
 
 ## Binary installation
 **Not possible**, binaries are not distributed just yet.
+
+## Repositories and named installation
+
+Create a local sync database from a directory containing `.mtz` packages and their
+`.mtz.sha256` files:
+
+```sh
+mate repo-add core /srv/matepkg-repo/
+mate search vim
+mate install vim
+```
+
+Named installation resolves dependencies from the local sync database and caches
+packages under `/var/lib/matepkg/cache/`. Installation stops on the first failure;
+rollback of packages already installed in the same command is not implemented yet.
+
+## Installation root and hooks
+
+`MATEPKG_ROOT` controls where package files are extracted (default `/`). The
+database follows that root at `<root>/var/lib/matepkg`; set `MATEPKG_DB_ROOT`
+explicitly to override it:
+
+```sh
+MATEPKG_ROOT=/mnt/lfs mate install hello
+```
+
+Packages may include `hooks.sh` beside `desc.toml`, defining
+`pre_install`, `post_install`, `pre_remove`, `post_remove`, `pre_upgrade` and
+`post_upgrade`. The hook file is retained in the package database. Hooks are
+skipped with a warning when `MATEPKG_ROOT` is not `/`, because they currently
+run on the host and are not chrooted into the target root. Hook failures warn
+but do not roll back the operation.

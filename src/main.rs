@@ -2,16 +2,22 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 mod create;
+mod fetch;
 mod generate;
 mod install;
 mod package;
 mod remove;
+mod repo;
+mod resolve;
 mod upgrade;
 
 use crate::create::create_package;
+use crate::fetch::fetch;
 use crate::generate::generate_metadata;
 use crate::install::install_package;
 use crate::remove::remove_package;
+use crate::repo::add_repo;
+use crate::resolve::resolve;
 use crate::upgrade::upgrade_package;
 
 #[derive(Parser, Debug)]
@@ -40,6 +46,10 @@ enum Commands {
         #[arg(required = true)]
         packages: Vec<String>,
     },
+    RepoAdd {
+        repo_name: String,
+        path: PathBuf,
+    },
     Remove {
         #[arg(required = true)]
         packages: Vec<String>,
@@ -48,8 +58,13 @@ enum Commands {
         query: String,
         #[arg(short = 'o', long = "one-line")]
         one_line: bool,
+        #[arg(short = 'i', long = "installed")]
+        installed: bool,
     },
-    List,
+    List {
+        #[arg(long)]
+        available: bool,
+    },
     Info {
         package: String,
     },
@@ -95,12 +110,38 @@ fn main() {
             }
             for pkg_path_str in packages {
                 println!("=> Installing package: {}", pkg_path_str);
-                let pkg_path = PathBuf::from(pkg_path_str);
-                if let Err(e) = install_package(&pkg_path) {
-                    eprintln!("\n=> [ERROR] Package installation failed: {}", e);
-                    std::process::exit(1);
+                let pkg_path = PathBuf::from(&pkg_path_str);
+                let direct = pkg_path.extension().and_then(|e| e.to_str()) == Some("mtz")
+                    || pkg_path.is_file()
+                    || PathBuf::from(format!("{}.mtz", pkg_path.display())).is_file();
+                if direct {
+                    if let Err(e) = install_package(&pkg_path) {
+                        eprintln!("\n=> [ERROR] Package installation failed: {}", e);
+                        std::process::exit(1);
+                    }
+                } else {
+                    match resolve(&pkg_path_str).and_then(|packages| {
+                        for package in packages {
+                            let fetched = fetch(&package)?;
+                            install_package(&fetched)?;
+                        }
+                        Ok::<(), Box<dyn std::error::Error>>(())
+                    }) {
+                        Ok(()) => {}
+                        Err(e) => {
+                            eprintln!("\n=> [ERROR] Package installation failed: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
                 }
             }
+        }
+        Commands::RepoAdd { repo_name, path } => {
+            if let Err(e) = add_repo(&repo_name, &path) {
+                eprintln!("=> [ERROR] Repository sync failed: {}", e);
+                std::process::exit(1);
+            }
+            println!("=> Repository '{}' synchronized.", repo_name);
         }
         Commands::Remove { packages } => {
             if !is_root() {
@@ -117,14 +158,18 @@ fn main() {
                 }
             }
         }
-        Commands::Search { query, one_line } => {
-            if let Err(e) = search_packages(&query, one_line) {
+        Commands::Search {
+            query,
+            one_line,
+            installed,
+        } => {
+            if let Err(e) = search_packages(&query, one_line, installed) {
                 eprintln!("=> [ERROR] {}", e);
                 std::process::exit(1);
             }
         }
-        Commands::List => {
-            if let Err(e) = list_packages() {
+        Commands::List { available } => {
+            if let Err(e) = list_packages(available) {
                 eprintln!("=> [ERROR] {}", e);
                 std::process::exit(1);
             }
@@ -164,17 +209,50 @@ fn is_root() -> bool {
         .unwrap_or(false)
 }
 
-fn search_packages(query: &str, one_line: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn search_packages(
+    query: &str,
+    one_line: bool,
+    installed_only: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let query = query.to_lowercase();
-    for (metadata, _) in crate::package::installed_packages()? {
+    let installed = crate::package::installed_packages()?;
+    let mut results = installed
+        .iter()
+        .map(|(m, _)| (m.clone(), true))
+        .collect::<Vec<_>>();
+    if !installed_only {
+        for (metadata, _) in crate::package::sync_packages(None)? {
+            if !installed
+                .iter()
+                .any(|(i, _)| i.pkgname == metadata.pkgname && i.version == metadata.version)
+            {
+                results.push((metadata, false));
+            }
+        }
+    }
+    for (metadata, is_installed) in results {
         let text =
             format!("{} {} {}", metadata.pkgname, metadata.desc, metadata.url).to_lowercase();
         if text.contains(&query) {
             if one_line {
-                println!("{} - {}", metadata.canonical_name(), metadata.desc);
+                println!(
+                    "[{}] {} - {}",
+                    if is_installed {
+                        "installed"
+                    } else {
+                        "available"
+                    },
+                    metadata.canonical_name(),
+                    metadata.desc
+                );
             } else {
                 println!(
-                    "{}\n  {}\n  {}\n",
+                    "[{}] {}\n  {}\n  {}\n",
+                    if is_installed {
+                        "installed"
+                    } else {
+                        "available"
+                    },
                     metadata.canonical_name(),
                     metadata.desc,
                     metadata.url
@@ -185,18 +263,30 @@ fn search_packages(query: &str, one_line: bool) -> Result<(), Box<dyn std::error
     Ok(())
 }
 
-fn list_packages() -> Result<(), Box<dyn std::error::Error>> {
-    for (metadata, _) in crate::package::installed_packages()? {
+fn list_packages(available: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let packages = if available {
+        crate::package::sync_packages(None)?
+    } else {
+        crate::package::installed_packages()?
+    };
+    for (metadata, _) in packages {
         println!("{}", metadata.canonical_name());
     }
     Ok(())
 }
 
 fn info_package(name: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let package = crate::package::installed_packages()?
+    if let Some((metadata, _)) = crate::package::installed_packages()?
         .into_iter()
         .find(|(metadata, _)| metadata.pkgname == name || metadata.canonical_name() == name)
-        .ok_or_else(|| format!("package '{}' is not installed", name))?;
-    println!("{:#?}", package.0);
+    {
+        println!("[installed]\n{:#?}", metadata);
+        return Ok(());
+    }
+    let package = crate::package::sync_packages(None)?
+        .into_iter()
+        .find(|(metadata, _)| metadata.pkgname == name || metadata.canonical_name() == name)
+        .ok_or_else(|| format!("package '{}' was not found", name))?;
+    println!("[available]\n{:#?}", package.0);
     Ok(())
 }

@@ -1,13 +1,28 @@
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use tar::Archive;
 use zstd::stream::Decoder;
 
-use crate::package::{Metadata, desc_dir, list_dir, safe_archive_path};
+use crate::package::{
+    Metadata, desc_dir, hooks_dir, install_root, installed_packages, list_dir, run_hook,
+    safe_archive_path, satisfies, split_dependency,
+};
 
 pub fn install_package(package_path_arg: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    install_package_impl(package_path_arg, true)
+}
+
+pub(crate) fn install_package_without_hooks(
+    package_path_arg: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    install_package_impl(package_path_arg, false)
+}
+
+fn install_package_impl(
+    package_path_arg: &Path,
+    run_install_hooks: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     // -- Checking for file extension --
     let package_path = if package_path_arg.extension().and_then(|s| s.to_str()) == Some("mtz") {
         package_path_arg.to_path_buf()
@@ -96,23 +111,38 @@ pub fn install_package(package_path_arg: &Path) -> Result<(), Box<dyn std::error
     metadata
         .validate()
         .map_err(|e| format!("Invalid metadata: {}", e))?;
+    let installed = installed_packages()?;
     for dependency in &metadata.deps {
-        let dependency_name = dependency
-            .split(['=', '<', '>', ' '])
-            .next()
-            .unwrap_or(dependency);
-        let satisfied = desc_dir().exists()
-            && fs::read_dir(desc_dir())?
-                .filter_map(Result::ok)
-                .any(|entry| {
-                    fs::read_to_string(entry.path())
-                        .ok()
-                        .and_then(|content| toml::from_str::<Metadata>(&content).ok())
-                        .map(|installed| installed.pkgname == dependency_name)
-                        .unwrap_or(false)
-                });
+        let (dependency_name, constraint) = split_dependency(dependency);
+        let dependency_name = dependency_name.trim();
+        let satisfied = installed.iter().any(|(installed, _)| {
+            installed.pkgname == dependency_name
+                && (constraint.is_empty() || satisfies(&installed.version, constraint))
+        });
         if !satisfied {
             return Err(format!("dependency '{}' is not installed", dependency).into());
+        }
+    }
+
+    let mut hooks_content = None;
+    let hooks_file = File::open(&package_path)?;
+    let hooks_decoder = Decoder::new(hooks_file)?;
+    let mut hooks_archive = Archive::new(hooks_decoder);
+    for entry in hooks_archive.entries()? {
+        let mut entry = entry?;
+        if entry.path()? == Path::new("hooks.sh") {
+            let mut content = String::new();
+            std::io::Read::read_to_string(&mut entry, &mut content)?;
+            hooks_content = Some(content);
+            break;
+        }
+    }
+    let hook_path = hooks_dir().join(format!("{}.sh", metadata.canonical_name()));
+    if let Some(content) = &hooks_content {
+        fs::create_dir_all(hooks_dir())?;
+        fs::write(&hook_path, content)?;
+        if run_install_hooks {
+            run_hook(&hook_path, "pre_install", &[])?;
         }
     }
 
@@ -136,17 +166,20 @@ pub fn install_package(package_path_arg: &Path) -> Result<(), Box<dyn std::error
             continue;
         }
 
-        let target = PathBuf::from("/").join(&path);
+        let target = install_root().join(&path);
         if (target.is_file() || target.is_symlink())
             && path != Path::new("desc.toml")
-            && path != Path::new("pos.sh")
+            && path != Path::new("hooks.sh")
             && !path_owned_by_installed_package(&path)?
         {
             return Err(
                 format!("refusing to overwrite existing file '{}'", target.display()).into(),
             );
         }
-        entry.unpack_in("/")?;
+        if path == Path::new("hooks.sh") {
+            continue;
+        }
+        entry.unpack_in(install_root())?;
         extracted_paths.push(path);
     }
 
@@ -158,7 +191,7 @@ pub fn install_package(package_path_arg: &Path) -> Result<(), Box<dyn std::error
     // -- Post-extraction management --
 
     // Reads metadata to get canonical package name
-    let temp_desc_path = PathBuf::from("/desc.toml");
+    let temp_desc_path = install_root().join("desc.toml");
     let metadata_content = fs::read_to_string(&temp_desc_path)?;
     let metadata: Metadata = toml::from_str(&metadata_content)?;
     let canonical_name = metadata.canonical_name();
@@ -184,23 +217,8 @@ pub fn install_package(package_path_arg: &Path) -> Result<(), Box<dyn std::error
     fs::rename(&temp_desc_path, &final_desc_path)?;
     println!("=> Metadata moved to '{}'", final_desc_path.display());
 
-    // -- Script execution --
-    let pos_install_script = PathBuf::from("/pos.sh");
-    if pos_install_script.exists() {
-        println!("=> Running post-install script (pos.sh)…");
-        let status = Command::new("bash").arg(&pos_install_script).status()?;
-        if !status.success() {
-            // Maybe we should revert the installation here in the future?
-            eprintln!("[WARNING] The post-install script returned an error.");
-        }
-    }
-
-    // -- Final cleaning --
-    println!("=> Cleaning control files from the root…");
-    // Removes the control files that were extracted to the root.
-    // Using the list `extracted_paths` to guarantee that only what was extracted is deleted.
-    if pos_install_script.exists() {
-        fs::remove_file(pos_install_script)?;
+    if run_install_hooks {
+        run_hook(&hook_path, "post_install", &[])?;
     }
 
     println!("\nPackage '{}' successfully installed!", canonical_name);
