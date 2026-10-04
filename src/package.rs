@@ -165,6 +165,28 @@ pub fn sync_packages(
     Ok(packages)
 }
 
+pub fn repository_priority() -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    if let Some(value) = std::env::var_os("MATEPKG_REPOS") {
+        return Ok(value
+            .to_string_lossy()
+            .split(':')
+            .map(str::to_owned)
+            .filter(|v| !v.is_empty())
+            .collect());
+    }
+    let root = sync_dir();
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut names: Vec<_> = fs::read_dir(root)?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect();
+    names.sort();
+    Ok(names)
+}
+
 pub fn satisfies(installed: &str, constraint: &str) -> bool {
     let constraint = constraint.trim();
     let (operator, required) = ["<=", ">=", "!=", "=", "<", ">"]
@@ -209,6 +231,10 @@ mod tests {
         assert!(super::satisfies("2.39", ">2.38"));
         assert!(super::satisfies("2.35", "<2.38"));
         assert!(!super::satisfies("2.35", ">=2.38"));
+        assert!(super::satisfies("2.38", "=2.38"));
+        assert!(super::satisfies("2.38", "<=2.38"));
+        assert!(super::satisfies("2.38", "!=2.39"));
+        assert!(!super::satisfies("invalid", ">=2.38"));
     }
 
     #[test]
@@ -225,6 +251,12 @@ mod tests {
         };
         assert!(metadata.validate().is_ok());
         assert_eq!(metadata.canonical_name(), "demo-1.0-1");
+        let mut invalid = metadata.clone();
+        invalid.pkgname = "bad-name".into();
+        assert!(invalid.validate().is_err());
+        invalid.pkgname = "demo".into();
+        invalid.desc.clear();
+        assert!(invalid.validate().is_err());
     }
 
     #[test]

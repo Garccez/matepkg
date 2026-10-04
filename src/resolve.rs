@@ -1,5 +1,8 @@
-use crate::package::{Metadata, installed_packages, satisfies, split_dependency, sync_packages};
+use crate::package::{
+    Metadata, installed_packages, repository_priority, satisfies, split_dependency, sync_packages,
+};
 use std::collections::{HashMap, HashSet};
+use version_compare::Version;
 
 #[derive(Clone, Debug)]
 pub struct PackageRef {
@@ -10,7 +13,8 @@ pub struct PackageRef {
 
 pub fn resolve(pkgname: &str) -> Result<Vec<PackageRef>, Box<dyn std::error::Error>> {
     let available = sync_packages(None)?;
-    let mut by_name = HashMap::new();
+    let priorities = repository_priority()?;
+    let mut candidates: HashMap<String, Vec<PackageRef>> = HashMap::new();
     for (metadata, path) in available {
         let repo = path
             .parent()
@@ -20,25 +24,19 @@ pub fn resolve(pkgname: &str) -> Result<Vec<PackageRef>, Box<dyn std::error::Err
             .into_owned();
         let source = std::fs::read_to_string(path)?;
         let record: crate::repo::SyncPackage = toml::from_str(&source)?;
-        let package_name = metadata.pkgname.clone();
-        if by_name
-            .insert(
-                metadata.pkgname.clone(),
-                PackageRef {
-                    metadata,
-                    repo,
-                    filename: record.filename,
-                },
-            )
-            .is_some()
-        {
-            return Err(format!(
-                "multiple available versions for '{}'; resolve manually",
-                package_name
-            )
-            .into());
-        }
+        candidates
+            .entry(metadata.pkgname.clone())
+            .or_default()
+            .push(PackageRef {
+                metadata,
+                repo,
+                filename: record.filename,
+            });
     }
+    let by_name: HashMap<_, _> = candidates
+        .into_iter()
+        .map(|(name, entries)| select_candidate(&name, entries, &priorities))
+        .collect::<Result<_, _>>()?;
     let installed = installed_packages()?;
     let installed_by_name: HashMap<_, _> = installed
         .into_iter()
@@ -111,14 +109,88 @@ pub fn resolve(pkgname: &str) -> Result<Vec<PackageRef>, Box<dyn std::error::Err
     Ok(result)
 }
 
+fn select_candidate(
+    name: &str,
+    mut entries: Vec<PackageRef>,
+    priorities: &[String],
+) -> Result<(String, PackageRef), Box<dyn std::error::Error>> {
+    if entries.is_empty() {
+        return Err(format!("no available versions for '{}'", name).into());
+    }
+    entries.sort_by(|a, b| {
+        let ar = priorities
+            .iter()
+            .position(|repo| repo == &a.repo)
+            .unwrap_or(usize::MAX);
+        let br = priorities
+            .iter()
+            .position(|repo| repo == &b.repo)
+            .unwrap_or(usize::MAX);
+        ar.cmp(&br).then_with(|| {
+            match (
+                Version::from(&a.metadata.version),
+                Version::from(&b.metadata.version),
+            ) {
+                (Some(av), Some(bv)) => match av.compare(bv) {
+                    version_compare::Cmp::Gt => std::cmp::Ordering::Less,
+                    version_compare::Cmp::Lt => std::cmp::Ordering::Greater,
+                    _ => b.metadata.build.cmp(&a.metadata.build),
+                },
+                _ => std::cmp::Ordering::Equal,
+            }
+        })
+    });
+    Ok((name.to_owned(), entries.remove(0)))
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::package::split_dependency;
+    use super::{PackageRef, select_candidate};
+    use crate::package::{Metadata, split_dependency};
+
+    fn package(repo: &str, version: &str) -> PackageRef {
+        PackageRef {
+            metadata: Metadata {
+                maintainer: "t".into(),
+                pkgname: "demo".into(),
+                version: version.into(),
+                build: "1".into(),
+                license: "MIT".into(),
+                desc: "d".into(),
+                url: "https://example.invalid".into(),
+                deps: vec![],
+            },
+            repo: repo.into(),
+            filename: format!("demo-{version}-1.mtz"),
+        }
+    }
 
     #[test]
     fn parses_dependency_constraints() {
         assert_eq!(split_dependency("glibc>=2.38"), ("glibc", ">=2.38"));
         assert_eq!(split_dependency("openssl"), ("openssl", ""));
         assert_eq!(split_dependency(" zlib < 2.0"), ("zlib", "< 2.0"));
+    }
+
+    #[test]
+    fn chooses_priority_repo_before_newer_lower_priority_version() {
+        let (_, selected) = select_candidate(
+            "demo",
+            vec![package("core", "1.0"), package("testing", "9.0")],
+            &["core".into(), "testing".into()],
+        )
+        .unwrap();
+        assert_eq!(selected.repo, "core");
+    }
+
+    #[test]
+    fn chooses_highest_version_inside_same_repo() {
+        let (_, selected) = select_candidate(
+            "demo",
+            vec![package("core", "1.0"), package("core", "2.0")],
+            &["core".into()],
+        )
+        .unwrap();
+        assert_eq!(selected.metadata.version, "2.0");
     }
 }

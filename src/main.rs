@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 mod create;
 mod fetch;
@@ -102,12 +102,13 @@ fn main() {
             }
         }
         Commands::Install { packages } => {
-            if !is_root() {
+            if requires_root() {
                 eprintln!(
                     "\n=> [ERROR] This operation requires root privileges. Run this again with sudo or with root privileges."
                 );
                 std::process::exit(1);
             }
+            let mut transaction_packages = Vec::new();
             for pkg_path_str in packages {
                 println!("=> Installing package: {}", pkg_path_str);
                 let pkg_path = PathBuf::from(&pkg_path_str);
@@ -115,21 +116,24 @@ fn main() {
                     || pkg_path.is_file()
                     || PathBuf::from(format!("{}.mtz", pkg_path.display())).is_file();
                 if direct {
-                    if let Err(e) = install_package(&pkg_path) {
-                        eprintln!("\n=> [ERROR] Package installation failed: {}", e);
-                        std::process::exit(1);
+                    match install_package(&pkg_path) {
+                        Ok(name) => transaction_packages.push(name),
+                        Err(e) => {
+                            report_transaction_failure(e, &transaction_packages);
+                            std::process::exit(1);
+                        }
                     }
                 } else {
                     match resolve(&pkg_path_str).and_then(|packages| {
                         for package in packages {
                             let fetched = fetch(&package)?;
-                            install_package(&fetched)?;
+                            transaction_packages.push(install_package(&fetched)?);
                         }
                         Ok::<(), Box<dyn std::error::Error>>(())
                     }) {
                         Ok(()) => {}
                         Err(e) => {
-                            eprintln!("\n=> [ERROR] Package installation failed: {}", e);
+                            report_transaction_failure(e, &transaction_packages);
                             std::process::exit(1);
                         }
                     }
@@ -144,7 +148,7 @@ fn main() {
             println!("=> Repository '{}' synchronized.", repo_name);
         }
         Commands::Remove { packages } => {
-            if !is_root() {
+            if requires_root() {
                 eprintln!(
                     "\n=> [ERROR] This operation requires root privileges. Run this again with sudo or with root privileges."
                 );
@@ -181,7 +185,7 @@ fn main() {
             }
         }
         Commands::Upgrade { packages } => {
-            if !is_root() {
+            if requires_root() {
                 eprintln!(
                     "\n=> [ERROR] This operation requires root privileges. Run this again with sudo or with root privileges."
                 );
@@ -207,6 +211,36 @@ fn is_root() -> bool {
         .output()
         .map(|output| String::from_utf8_lossy(&output.stdout).trim() == "0")
         .unwrap_or(false)
+}
+
+fn requires_root() -> bool {
+    crate::package::install_root() == Path::new("/") && !is_root()
+}
+
+fn report_transaction_failure(error: Box<dyn std::error::Error>, installed: &[String]) {
+    eprintln!("\n=> [ERROR] Package installation failed: {}", error);
+    if installed.is_empty() {
+        eprintln!("=> No previous package from this transaction required rollback.");
+        return;
+    }
+    eprintln!("=> Rolling back packages installed by this transaction...");
+    let mut failed = Vec::new();
+    for package in installed.iter().rev() {
+        if let Err(error) = remove_package(package) {
+            failed.push(format!("{} ({})", package, error));
+        }
+    }
+    if failed.is_empty() {
+        eprintln!("=> Rollback completed for files and database records.");
+    } else {
+        eprintln!(
+            "=> ROLLBACK INCOMPLETE. Packages with unknown state: {}",
+            failed.join(", ")
+        );
+    }
+    eprintln!(
+        "=> Hooks from the failed package may have had partial side effects; review manually."
+    );
 }
 
 fn search_packages(

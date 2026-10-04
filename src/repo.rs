@@ -147,4 +147,35 @@ mod tests {
         assert_eq!(decoded.filename, "demo-1.0-1.mtz");
         let _ = fs::remove_dir_all(dir);
     }
+
+    #[test]
+    fn reads_repository_source_file() {
+        let dir = std::env::temp_dir().join(format!("matepkg-source-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(".source"), "/srv/packages\n").unwrap();
+        assert_eq!(
+            super::repo_source(&dir, "demo-1.0-1.mtz").unwrap(),
+            std::path::PathBuf::from("/srv/packages/demo-1.0-1.mtz")
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn rejects_archive_without_metadata() {
+        let dir = std::env::temp_dir().join(format!("matepkg-invalid-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let package = dir.join("invalid.mtz");
+        let file = File::create(&package).unwrap();
+        let encoder = Encoder::new(file, 1).unwrap();
+        let mut builder = Builder::new(encoder);
+        let content = b"not metadata";
+        let mut header = tar::Header::new_gnu();
+        header.set_path("README").unwrap();
+        header.set_size(content.len() as u64);
+        header.set_cksum();
+        builder.append(&header, content.as_slice()).unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
+        assert!(analyze_new_package(&package).is_err());
+        let _ = fs::remove_dir_all(dir);
+    }
 }

@@ -9,20 +9,20 @@ use crate::package::{
     safe_archive_path, satisfies, split_dependency,
 };
 
-pub fn install_package(package_path_arg: &Path) -> Result<(), Box<dyn std::error::Error>> {
+pub fn install_package(package_path_arg: &Path) -> Result<String, Box<dyn std::error::Error>> {
     install_package_impl(package_path_arg, true)
 }
 
 pub(crate) fn install_package_without_hooks(
     package_path_arg: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<String, Box<dyn std::error::Error>> {
     install_package_impl(package_path_arg, false)
 }
 
 fn install_package_impl(
     package_path_arg: &Path,
     run_install_hooks: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<String, Box<dyn std::error::Error>> {
     // -- Checking for file extension --
     let package_path = if package_path_arg.extension().and_then(|s| s.to_str()) == Some("mtz") {
         package_path_arg.to_path_buf()
@@ -172,21 +172,54 @@ fn install_package_impl(
             && path != Path::new("hooks.sh")
             && !path_owned_by_installed_package(&path)?
         {
+            let rollback_failures = rollback_extracted(&extracted_paths);
+            let _ = fs::remove_file(install_root().join("desc.toml"));
+            let _ = fs::remove_file(&hook_path);
+            let rollback_status = rollback_status(&rollback_failures);
             return Err(
-                format!("refusing to overwrite existing file '{}'", target.display()).into(),
+                format!(
+                    "refusing to overwrite existing file '{}'; {}; package hooks may have had partial side effects",
+                    target.display(), rollback_status
+                ).into(),
             );
         }
         if path == Path::new("hooks.sh") {
             continue;
         }
-        entry.unpack_in(install_root())?;
+        if let Err(error) = entry.unpack_in(install_root()) {
+            let rollback_failures = rollback_extracted(&extracted_paths);
+            if install_root().join("desc.toml").exists() {
+                let _ = fs::remove_file(install_root().join("desc.toml"));
+            }
+            if hook_path.exists() {
+                let _ = fs::remove_file(&hook_path);
+            }
+            let rollback_status = rollback_status(&rollback_failures);
+            return Err(format!(
+                "package extraction failed after {} entries: {}; {}; package hooks may have had partial side effects",
+                extracted_paths.len(), error, rollback_status
+            ).into());
+        }
         extracted_paths.push(path);
     }
 
     if extracted_paths.is_empty() {
         return Err("Package seems empty. Nothing was done.".into());
     }
-    println!("=> {} files successfully extracted.", extracted_paths.len());
+    let (file_count, directory_count) =
+        extracted_paths
+            .iter()
+            .fold((0, 0), |(files, directories), path| {
+                if install_root().join(path).is_dir() {
+                    (files, directories + 1)
+                } else {
+                    (files + 1, directories)
+                }
+            });
+    println!(
+        "=> {} files and {} directories successfully extracted.",
+        file_count, directory_count
+    );
 
     // -- Post-extraction management --
 
@@ -204,10 +237,19 @@ fn install_package_impl(
         .map(|p| p.to_string_lossy())
         .collect::<Vec<_>>()
         .join("\n");
-    fs::write(
+    if let Err(error) = fs::write(
         db_list_dir.join(format!("{}.list", canonical_name)),
         list_content,
-    )?;
+    ) {
+        let rollback_failures = rollback_extracted(&extracted_paths);
+        let _ = fs::remove_file(&temp_desc_path);
+        let _ = fs::remove_file(&hook_path);
+        let rollback_status = rollback_status(&rollback_failures);
+        return Err(format!(
+            "failed to register package; {}; package hooks may have had partial side effects: {error}",
+            rollback_status
+        ).into());
+    }
     println!("=> Files manifest stored at the database.");
 
     // Moves the description file to the "database".
@@ -222,7 +264,41 @@ fn install_package_impl(
     }
 
     println!("\nPackage '{}' successfully installed!", canonical_name);
-    Ok(())
+    Ok(canonical_name)
+}
+
+fn rollback_extracted(paths: &[PathBuf]) -> Vec<PathBuf> {
+    rollback_extracted_at(&install_root(), paths)
+}
+
+fn rollback_extracted_at(root: &Path, paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut failures = Vec::new();
+    for path in paths.iter().rev() {
+        let full_path = root.join(path);
+        if full_path.is_file() || full_path.is_symlink() {
+            if fs::remove_file(&full_path).is_err() {
+                failures.push(path.clone());
+            }
+        } else if full_path.is_dir() && fs::remove_dir(&full_path).is_err() {
+            failures.push(path.clone());
+        }
+    }
+    failures
+}
+
+fn rollback_status(failures: &[PathBuf]) -> String {
+    if failures.is_empty() {
+        "file rollback completed".to_owned()
+    } else {
+        format!(
+            "ROLLBACK INCOMPLETE for: {}",
+            failures
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
 }
 
 fn path_owned_by_installed_package(path: &Path) -> Result<bool, Box<dyn std::error::Error>> {
@@ -236,4 +312,34 @@ fn path_owned_by_installed_package(path: &Path) -> Result<bool, Box<dyn std::err
         }
     }
     Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rollback_status;
+    use std::path::PathBuf;
+
+    #[test]
+    fn reports_successful_and_incomplete_rollbacks() {
+        assert_eq!(rollback_status(&[]), "file rollback completed");
+        assert_eq!(
+            rollback_status(&[
+                PathBuf::from("usr/bin/demo"),
+                PathBuf::from("etc/demo.conf")
+            ]),
+            "ROLLBACK INCOMPLETE for: usr/bin/demo, etc/demo.conf"
+        );
+    }
+
+    #[test]
+    fn rollback_removes_files_from_alternate_root() {
+        let root = std::env::temp_dir().join(format!("matepkg-rollback-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+        std::fs::write(root.join("usr/bin/demo"), b"demo").unwrap();
+        let failures = super::rollback_extracted_at(&root, &[PathBuf::from("usr/bin/demo")]);
+        assert!(failures.is_empty());
+        assert!(!root.join("usr/bin/demo").exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

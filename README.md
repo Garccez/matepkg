@@ -37,9 +37,18 @@ mate search vim
 mate install vim
 ```
 
+When multiple repositories provide a package, set `MATEPKG_REPOS` to a
+colon-separated priority list (for example `core:testing`). The first matching
+repository wins; within that repository the highest version wins.
+
 Named installation resolves dependencies from the local sync database and caches
 packages under `/var/lib/matepkg/cache/`. Installation stops on the first failure;
-rollback of packages already installed in the same command is not implemented yet.
+packages installed earlier in the same command are rolled back in reverse order.
+Rollback cannot undo arbitrary side effects from package hooks; if rollback itself
+fails, the error lists packages whose state must be reviewed manually.
+If a filesystem write fails partway through a single file extraction, that
+partially written file may not be listed for cleanup and must be reviewed
+manually.
 
 ## Installation root and hooks
 
